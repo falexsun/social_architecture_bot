@@ -1,0 +1,13 @@
+services:
+  bot:
+    build: .
+    image: social-architecture-bot:latest
+    env_file:
+      - .env
+    environment:
+      # Внутри контейнера localhost указывает на контейнер, а не на Windows.
+      LM_STUDIO_URL: ${DOCKER_LM_STUDIO_URL:-http://host.docker.internal:1234/v1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    init: true
+    restart: unless-stopped
