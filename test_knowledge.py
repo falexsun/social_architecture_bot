@@ -4,9 +4,30 @@ import unittest
 from pathlib import Path
 
 from knowledge import KnowledgeBase, normalize, tokens
+from bot import telegram_plain_text
 
 
 class KnowledgeTests(unittest.TestCase):
+    def test_telegram_markdown_cleanup(self):
+        source = """### Заголовок
+
+**Главная мысль**
+
+---
+
+- Первый пункт
+> Цитата
+
+| Принцип | Обоснование |
+|---|---|
+| Системность | Все взаимосвязано |
+"""
+        self.assertEqual(
+            telegram_plain_text(source),
+            "Заголовок\n\nГлавная мысль\n\n• Первый пункт\nЦитата\n\n"
+            "Принцип — Обоснование\nСистемность — Все взаимосвязано",
+        )
+
     def test_russian_normalization(self):
         self.assertEqual(normalize("проектирования"), normalize("проектирование"))
         self.assertIn(normalize("изменения"), tokens("Проектирование социальных изменений"))
