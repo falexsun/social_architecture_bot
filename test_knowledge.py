@@ -11,7 +11,7 @@ class KnowledgeTests(unittest.TestCase):
     def test_telegram_markdown_cleanup(self):
         source = """### Заголовок
 
-**Главная мысль**
+**Главная мысль** и *важный вывод*.
 
 ---
 
@@ -24,7 +24,7 @@ class KnowledgeTests(unittest.TestCase):
 """
         self.assertEqual(
             telegram_plain_text(source),
-            "Заголовок\n\nГлавная мысль\n\n• Первый пункт\nЦитата\n\n"
+            "Заголовок\n\nГлавная мысль и важный вывод.\n\n• Первый пункт\nЦитата\n\n"
             "Принцип — Обоснование\nСистемность — Все взаимосвязано",
         )
 
