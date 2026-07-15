@@ -36,6 +36,20 @@ class KnowledgeTests(unittest.TestCase):
             "Принцип — Обоснование\nСистемность — Все взаимосвязано",
         )
 
+    def test_source_references_are_removed(self):
+        source = (
+            "Социальная архитектура повышает качество жизни [Источник, стр. 4]. "
+            "Изменения проверяют на пилоте [Семёнов А. Ю., стр. 6]."
+        )
+        result = telegram_plain_text(source)
+        self.assertNotIn("Источник", result)
+        self.assertNotIn("Семёнов", result)
+        self.assertNotIn("стр.", result)
+        self.assertEqual(
+            result,
+            "Социальная архитектура повышает качество жизни. Изменения проверяют на пилоте.",
+        )
+
     def test_russian_normalization(self):
         self.assertEqual(normalize("проектирования"), normalize("проектирование"))
         self.assertIn(normalize("изменения"), tokens("Проектирование социальных изменений"))
