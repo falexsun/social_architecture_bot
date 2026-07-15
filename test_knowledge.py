@@ -39,7 +39,8 @@ class KnowledgeTests(unittest.TestCase):
     def test_source_references_are_removed(self):
         source = (
             "Социальная архитектура повышает качество жизни [Источник, стр. 4]. "
-            "Изменения проверяют на пилоте [Семёнов А. Ю., стр. 6]."
+            "Изменения проверяют на пилоте [Семёнов А. Ю., стр. 6]. "
+            "Затем решение корректируют (стр. 6)."
         )
         result = telegram_plain_text(source)
         self.assertNotIn("Источник", result)
@@ -47,7 +48,8 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("стр.", result)
         self.assertEqual(
             result,
-            "Социальная архитектура повышает качество жизни. Изменения проверяют на пилоте.",
+            "Социальная архитектура повышает качество жизни. Изменения проверяют на пилоте. "
+            "Затем решение корректируют.",
         )
 
     def test_russian_normalization(self):
