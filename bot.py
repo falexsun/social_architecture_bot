@@ -23,6 +23,8 @@ API_TOKEN = os.getenv("LM_STUDIO_API_TOKEN", "lm-studio")
 TOP_K = int(os.getenv("TOP_K", "7"))
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "18000"))
 MAX_QUESTION_CHARS = int(os.getenv("MAX_QUESTION_CHARS", "4000"))
+MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "2400"))
+MAX_CONTINUATIONS = int(os.getenv("MAX_CONTINUATIONS", "1"))
 ALLOWED_USER_IDS = {
     int(value.strip())
     for value in os.getenv("ALLOWED_TELEGRAM_USER_IDS", "").split(",")
@@ -46,11 +48,20 @@ SYSTEM_PROMPT = """Ты — аналитик и практик социальн�
 - начинай сразу с краткого ответа в 2–3 предложениях;
 - для перечислений используй короткие пункты с символом «•» или обычную нумерацию;
 - не делай много заголовков; допустимы короткие подписи вида «Практический смысл:»;
-- пиши компактно, без повторения одной мысли разными словами.
+- пиши компактно, без повторения одной мысли разными словами;
+- старайся уложить полный ответ в 6000 символов и обязательно закончи мысль и вывод.
 
 Не раскрывай скрытые рассуждения. Давай краткое обоснование, вывод и, когда уместно, план действий."""
 
 KB = KnowledgeBase(ROOT / "data" / "chunks.json")
+
+
+def generation_was_truncated(finish_reason: object) -> bool:
+    return str(finish_reason or "").lower() in {
+        "length",
+        "max_tokens",
+        "maxpredictedtokensreached",
+    }
 
 
 def is_allowed(update: Update) -> bool:
@@ -74,21 +85,46 @@ async def ask_lm_studio(question: str, context_text: str, history: list[dict]) -
         "role": "user",
         "content": f"ВЫДЕРЖКИ ИЗ ИСТОЧНИКОВ:\n{context_text}\n\nВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{question}",
     })
-    payload = {
-        "model": MODEL,
-        "messages": messages,
-        "temperature": 0.35,
-        "top_p": 0.9,
-        "max_tokens": 1400,
-        "stream": False,
-    }
     headers = {"Authorization": f"Bearer {API_TOKEN}"}
+    parts: list[str] = []
     async with httpx.AsyncClient(timeout=180) as client:
-        response = await client.post(f"{BASE_URL}/chat/completions", json=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-    message = data["choices"][0]["message"]
-    return (message.get("content") or "").strip()
+        for attempt in range(MAX_CONTINUATIONS + 1):
+            payload = {
+                "model": MODEL,
+                "messages": messages,
+                "temperature": 0.35,
+                "top_p": 0.9,
+                "max_tokens": MAX_OUTPUT_TOKENS,
+                "stream": False,
+            }
+            response = await client.post(
+                f"{BASE_URL}/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            choice = response.json()["choices"][0]
+            content = (choice["message"].get("content") or "").strip()
+            if content:
+                parts.append(content)
+
+            if not generation_was_truncated(choice.get("finish_reason")):
+                break
+            if attempt >= MAX_CONTINUATIONS or not content:
+                break
+
+            messages.extend([
+                {"role": "assistant", "content": content},
+                {
+                    "role": "user",
+                    "content": (
+                        "Продолжи ровно с места остановки. Не повторяй уже написанное. "
+                        "Кратко заверши оставшиеся пункты и обязательно дай итоговый вывод."
+                    ),
+                },
+            ])
+
+    return "\n\n".join(parts).strip()
 
 
 def telegram_plain_text(text: str) -> str:

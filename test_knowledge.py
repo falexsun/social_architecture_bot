@@ -4,10 +4,18 @@ import unittest
 from pathlib import Path
 
 from knowledge import KnowledgeBase, normalize, tokens
-from bot import telegram_plain_text
+from bot import generation_was_truncated, split_message, telegram_plain_text
 
 
 class KnowledgeTests(unittest.TestCase):
+    def test_truncation_detection_and_telegram_split(self):
+        self.assertTrue(generation_was_truncated("length"))
+        self.assertTrue(generation_was_truncated("maxPredictedTokensReached"))
+        self.assertFalse(generation_was_truncated("stop"))
+        parts = list(split_message("слово " * 1500, limit=4000))
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(part) <= 4000 for part in parts))
+
     def test_telegram_markdown_cleanup(self):
         source = """### Заголовок
 
