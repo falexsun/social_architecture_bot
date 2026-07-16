@@ -139,11 +139,21 @@ async def ask_lm_studio(question: str, context_text: str, history: list[dict]) -
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError:
+                logging.error(
+                    "LM Studio returned %s for model '%s': %s",
+                    response.status_code,
+                    MODEL,
+                    response.text,
+                )
                 if attempt != 0 or not is_context_overflow(response):
                     raise
 
                 # Retry once with a compact request that fits even a small 4K context.
                 fallback_used = True
+                logging.warning(
+                    "Context overflow detected, retrying with compact context "
+                    "(3000 chars) and shortened history."
+                )
                 compact_context = context_text[:3000]
                 compact_history = history[-2:]
                 messages = build_messages(question, compact_context, compact_history)
@@ -312,7 +322,21 @@ async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Не удаётся подключиться к LM Studio. Запустите Local Server и загрузите модель qwen/qwen3-vl-8b.")
         return
     except httpx.HTTPStatusError as exc:
-        await update.message.reply_text(f"LM Studio вернул ошибку HTTP {exc.response.status_code}. Проверьте имя загруженной модели командой /status.")
+        error_body = exc.response.text or ""
+        if is_context_overflow(exc.response):
+            hint = (
+                f"LM Studio вернул ошибку HTTP {exc.response.status_code}: запрос не уместился в контекстное окно модели.\n\n"
+                f"Решения:\n"
+                f"1. В LM Studio перезагрузите модель с большим Context Length (например, 8192 или выше).\n"
+                f"2. Или уменьшите MAX_CONTEXT_CHARS / MAX_OUTPUT_TOKENS в файле .env и перезапустите контейнер."
+            )
+        else:
+            hint = (
+                f"LM Studio вернул ошибку HTTP {exc.response.status_code}.\n"
+                f"Проверьте имя загруженной модели командой /status. "
+                f"Подробности записаны в журнал бота (docker compose logs)."
+            )
+        await update.message.reply_text(hint)
         return
     except Exception:
         logging.exception("LM Studio request failed")
