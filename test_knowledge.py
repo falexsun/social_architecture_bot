@@ -4,10 +4,19 @@ import unittest
 from pathlib import Path
 
 from knowledge import KnowledgeBase, normalize, tokens
-from bot import generation_was_truncated, split_message, telegram_plain_text
+import httpx
+
+from bot import generation_was_truncated, is_context_overflow, split_message, telegram_plain_text
 
 
 class KnowledgeTests(unittest.TestCase):
+    def test_context_overflow_detection(self):
+        request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+        overflow = httpx.Response(400, request=request, text="The request exceeds the context window")
+        other = httpx.Response(400, request=request, text="Model not found")
+        self.assertTrue(is_context_overflow(overflow))
+        self.assertFalse(is_context_overflow(other))
+
     def test_truncation_detection_and_telegram_split(self):
         self.assertTrue(generation_was_truncated("length"))
         self.assertTrue(generation_was_truncated("maxPredictedTokensReached"))

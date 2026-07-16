@@ -26,6 +26,8 @@ MAX_QUESTION_CHARS = int(os.getenv("MAX_QUESTION_CHARS", "4000"))
 MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "3200"))
 CONTINUATION_OUTPUT_TOKENS = int(os.getenv("CONTINUATION_OUTPUT_TOKENS", "500"))
 MAX_CONTINUATIONS = int(os.getenv("MAX_CONTINUATIONS", "1"))
+MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "4"))
+MAX_HISTORY_MESSAGE_CHARS = int(os.getenv("MAX_HISTORY_MESSAGE_CHARS", "4000"))
 ALLOWED_USER_IDS = {
     int(value.strip())
     for value in os.getenv("ALLOWED_TELEGRAM_USER_IDS", "").split(",")
@@ -67,6 +69,38 @@ def generation_was_truncated(finish_reason: object) -> bool:
     }
 
 
+def is_context_overflow(response: httpx.Response) -> bool:
+    if response.status_code != 400:
+        return False
+    body = response.text.lower()
+    return any(
+        marker in body
+        for marker in (
+            "context window",
+            "context length",
+            "context_length",
+            "n_ctx",
+            "too many tokens",
+            "maximum context",
+            "контекст",
+        )
+    )
+
+
+def build_messages(question: str, context_text: str, history: list[dict]) -> list[dict]:
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        *history,
+        {
+            "role": "user",
+            "content": (
+                f"ВЫДЕРЖКИ ИЗ ИСТОЧНИКОВ:\n{context_text}"
+                f"\n\nВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{question}"
+            ),
+        },
+    ]
+
+
 def is_allowed(update: Update) -> bool:
     return not ALLOWED_USER_IDS or (
         update.effective_user is not None and update.effective_user.id in ALLOWED_USER_IDS
@@ -82,24 +116,19 @@ async def reject_if_forbidden(update: Update) -> bool:
 
 
 async def ask_lm_studio(question: str, context_text: str, history: list[dict]) -> str:
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(history[-6:])
-    messages.append({
-        "role": "user",
-        "content": f"ВЫДЕРЖКИ ИЗ ИСТОЧНИКОВ:\n{context_text}\n\nВОПРОС ПОЛЬЗОВАТЕЛЯ:\n{question}",
-    })
+    messages = build_messages(question, context_text, history[-MAX_HISTORY_MESSAGES:])
     headers = {"Authorization": f"Bearer {API_TOKEN}"}
     parts: list[str] = []
+    fallback_used = False
     async with httpx.AsyncClient(timeout=180) as client:
         for attempt in range(MAX_CONTINUATIONS + 1):
+            token_limit = MAX_OUTPUT_TOKENS if attempt == 0 else CONTINUATION_OUTPUT_TOKENS
             payload = {
                 "model": MODEL,
                 "messages": messages,
                 "temperature": 0.35,
                 "top_p": 0.9,
-                "max_tokens": (
-                    MAX_OUTPUT_TOKENS if attempt == 0 else CONTINUATION_OUTPUT_TOKENS
-                ),
+                "max_tokens": token_limit,
                 "stream": False,
             }
             response = await client.post(
@@ -107,13 +136,36 @@ async def ask_lm_studio(question: str, context_text: str, history: list[dict]) -
                 json=payload,
                 headers=headers,
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                if attempt != 0 or not is_context_overflow(response):
+                    raise
+
+                # Retry once with a compact request that fits even a small 4K context.
+                fallback_used = True
+                compact_context = context_text[:3000]
+                compact_history = history[-2:]
+                messages = build_messages(question, compact_context, compact_history)
+                messages[0] = {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT + "\nОтветь особенно кратко: не более 2500 символов.",
+                }
+                payload["messages"] = messages
+                payload["max_tokens"] = min(MAX_OUTPUT_TOKENS, 1000)
+                response = await client.post(
+                    f"{BASE_URL}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+
             choice = response.json()["choices"][0]
             content = (choice["message"].get("content") or "").strip()
             if content:
                 parts.append(content)
 
-            if not generation_was_truncated(choice.get("finish_reason")):
+            if fallback_used or not generation_was_truncated(choice.get("finish_reason")):
                 break
             if attempt >= MAX_CONTINUATIONS or not content:
                 break
@@ -269,8 +321,11 @@ async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not result:
         await update.message.reply_text("Модель вернула пустой ответ. Попробуйте переформулировать вопрос.")
         return
-    history.extend([{"role": "user", "content": question}, {"role": "assistant", "content": result}])
-    del history[:-6]
+    history.extend([
+        {"role": "user", "content": question[-MAX_HISTORY_MESSAGE_CHARS:]},
+        {"role": "assistant", "content": result[-MAX_HISTORY_MESSAGE_CHARS:]},
+    ])
+    del history[:-MAX_HISTORY_MESSAGES]
     for part in split_message(result):
         await update.message.reply_text(part)
 
