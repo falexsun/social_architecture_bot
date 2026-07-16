@@ -6,10 +6,52 @@ from pathlib import Path
 from knowledge import KnowledgeBase, normalize, tokens
 import httpx
 
-from bot import generation_was_truncated, is_context_overflow, split_message, telegram_plain_text
+from bot import (
+    build_messages,
+    generation_was_truncated,
+    is_case_question,
+    is_context_overflow,
+    remove_case_meta_sections,
+    split_message,
+    telegram_plain_text,
+)
 
 
 class KnowledgeTests(unittest.TestCase):
+    def test_case_mode_uses_silent_methodology(self):
+        question = "Рыбаки оставляют мусор. Реши кейс"
+        self.assertTrue(is_case_question(question))
+        prompt = build_messages(question, "контекст", [])[-1]["content"]
+        self.assertIn("Примени методологию молча", prompt)
+        self.assertIn("причинные гипотезы", prompt)
+
+    def test_case_meta_section_is_removed(self):
+        response = """Решение:
+Установить контейнеры и проверить график вывоза.
+
+• Ключевая идея:
+Социальная архитектура — это проектирование будущего вместе с людьми.
+
+• Итог:
+Начать с двух береговых участков и измерить массу мусора."""
+        self.assertEqual(
+            remove_case_meta_sections(response),
+            "Решение:\nУстановить контейнеры и проверить график вывоза.\n\n"
+            "• Итог:\nНачать с двух береговых участков и измерить массу мусора.",
+        )
+
+    def test_standalone_textbook_definition_is_removed_from_case(self):
+        response = (
+            "Сначала измерить объем мусора на трех участках.\n\n"
+            "Социальная архитектура — это проектирование будущего вместе с людьми.\n\n"
+            "Пилот провести в течение четырех недель."
+        )
+        self.assertEqual(
+            remove_case_meta_sections(response),
+            "Сначала измерить объем мусора на трех участках.\n\n"
+            "Пилот провести в течение четырех недель.",
+        )
+
     def test_context_overflow_detection(self):
         request = httpx.Request("POST", "http://localhost/v1/chat/completions")
         overflow = httpx.Response(400, request=request, text="The request exceeds the context window")
